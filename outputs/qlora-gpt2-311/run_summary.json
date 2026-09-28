@@ -11,5 +11,5 @@
   "lora_alpha": 32,
   "peak_gpu_mem_gb": 0.762,
   "mem_limit_gb": 14.0,
-  "wall_clock_sec": 84.9
+  "wall_clock_sec": 83.0
 }
