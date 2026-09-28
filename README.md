@@ -114,5 +114,6 @@ controller script existed.
 <!-- RUN_HISTORY:START -->
 | Date | System | GPU | Steps run | Total time | Peak GPU mem |
 |---|---|---|---|---|---|
+| 2026-09-28 | windows (Windows) | CPU only | gen_sft_data, gen_dpo_data | 2s | N/A (no GPU) |
 | 2026-09-27 | Google Colab (manual run, pre-controller) | T4 | sft | 1m 23s | 0.76 GB |
 <!-- RUN_HISTORY:END -->
