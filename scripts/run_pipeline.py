@@ -132,6 +132,21 @@ def get_github_token(prompt_if_missing: bool) -> str | None:
     return token.strip() or None
 
 
+def sync_before_commit(branch: str) -> None:
+    """Best-effort fast-forward onto origin before creating this run's commit,
+    so it doesn't diverge from commits pushed since this clone was made (e.g.
+    by an earlier run that committed locally but couldn't push, or by pulling
+    script fixes mid-session). Never destructive: only fast-forwards, and
+    only if that's possible without discarding anything."""
+    try:
+        git(["fetch", "origin", branch])
+        git(["merge", "--ff-only", f"origin/{branch}"])
+    except subprocess.CalledProcessError:
+        print(f"Note: local branch has diverged from origin/{branch} (commits on both sides) "
+              f"-- proceeding with a local commit anyway, but the push below may fail until "
+              f"you reconcile manually (e.g. `git pull --no-rebase origin {branch}`).")
+
+
 def push_with_token(branch: str, prompt_if_missing: bool) -> None:
     token = get_github_token(prompt_if_missing)
     if not token:
@@ -319,6 +334,8 @@ def main() -> None:
     if args.no_commit:
         print("--no-commit set: not touching git.")
         return
+
+    sync_before_commit(args.branch)
 
     status = git(["status", "--porcelain"]).stdout.strip()
     if not status:
