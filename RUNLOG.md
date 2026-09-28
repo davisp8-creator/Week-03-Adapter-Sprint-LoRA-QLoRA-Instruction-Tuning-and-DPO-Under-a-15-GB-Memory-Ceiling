@@ -93,17 +93,31 @@ pipeline uses -- we quantize with bitsandbytes 4-bit NF4, not torchao. Every
 tuner dispatchers, including the torchao one, so this broke adapter loading
 entirely, not just a torchao-specific code path.
 
-**Fix**: `env_setup.py::_remove_incompatible_torchao()` checks the installed
-`torchao` version after installing our stack and uninstalls it if it's below
-0.16.0 (leaves it alone if absent or already compatible). Since we never use
-torchao, removing it is safer than upgrading a package we don't otherwise
-touch.
+**Fix, attempt 1**: `env_setup.py::_remove_incompatible_torchao()` checked
+the installed `torchao` version and ran `pip uninstall -y torchao` if it was
+below 0.16.0. Pushed, then re-run on Colab -- the exact same
+`ImportError: Found an incompatible version of torchao. Found version
+0.10.0, ...` recurred, meaning the uninstall didn't actually stick (Colab's
+preinstalled packages are sometimes missing the metadata pip needs to fully
+remove them, or something else on that image keeps them resolvable).
 
-**Verified so far**: confirmed via `peft`'s actual installed source (above)
-that this is the real mechanism, and confirmed locally that
-`_remove_incompatible_torchao()` is a safe no-op on a box without torchao
-installed (the Windows VM). Not yet re-run on Colab against a real
-`torchao==0.10.0` install -- that's the next real-environment check.
+**Fix, attempt 2**: made the check self-verifying instead of trusting the
+uninstall silently. `_torchao_version()` now shells out to a fresh
+`python -c "import importlib.metadata..."` subprocess (avoids relying on
+this process's own possibly-stale import-metadata cache) both before and
+after attempting removal. If `torchao` is still importable after
+`pip uninstall`, it falls back to `pip install -U "torchao>=0.16.0"` instead
+(upgrading is a normal install operation and more likely to succeed on an
+image where a destructive uninstall doesn't). If even that doesn't leave
+`torchao` at >=0.16.0 or absent, it prints an explicit warning to restart
+the Colab runtime (Runtime > Restart session) rather than failing silently
+again.
+
+**Verified so far**: confirmed via `peft`'s actual installed source that the
+raise-not-return-False mechanism is real, and confirmed locally that the
+whole function is a safe no-op on a box without torchao installed (the
+Windows VM). Attempt 1 was verified NOT to fix the real Colab failure --
+that's why attempt 2 exists. Attempt 2 has not yet been re-run on Colab.
 
 ## Known unexercised path: the GPU memory ceiling has never actually been hit
 

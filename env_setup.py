@@ -77,24 +77,52 @@ def _pip_install(*args: str) -> None:
     subprocess.check_call([sys.executable, "-m", "pip", "install", "-q", *args])
 
 
+def _torchao_version() -> str | None:
+    """Query the installed torchao version via a fresh subprocess (not this
+    process's importlib.metadata cache, which can go stale after a pip
+    uninstall/install run from within the same process). Returns None if
+    torchao isn't installed/importable."""
+    result = subprocess.run(
+        [sys.executable, "-c", "import importlib.metadata as m; print(m.version('torchao'))"],
+        capture_output=True,
+        text=True,
+    )
+    return result.stdout.strip() or None if result.returncode == 0 else None
+
+
 def _remove_incompatible_torchao() -> None:
     """Colab preinstalls an old torchao (e.g. 0.10.0). peft>=0.21's LoRA dispatch
     calls is_torchao_available(), which *raises* (not returns False) if torchao
     is present but below 0.16.0 -- breaking every PeftModel.from_pretrained/
-    get_peft_model call. We don't use torchao (we use bitsandbytes 4-bit), so
-    just remove it rather than upgrading a package we never touch."""
-    try:
-        import importlib.metadata as _md
-
-        version = _md.version("torchao")
-    except _md.PackageNotFoundError:
-        return
-
+    get_peft_model call. We don't use torchao (we use bitsandbytes 4-bit)."""
     from packaging.version import parse
 
-    if parse(version) < parse("0.16.0"):
-        print(f"Removing incompatible torchao=={version} (peft requires >=0.16.0 or absent)")
-        subprocess.check_call([sys.executable, "-m", "pip", "uninstall", "-y", "-q", "torchao"])
+    version = _torchao_version()
+    if version is None or parse(version) >= parse("0.16.0"):
+        return  # absent, or already compatible -- nothing to do
+
+    print(f"Found incompatible torchao=={version} (peft requires >=0.16.0 or absent); removing it.")
+    subprocess.run([sys.executable, "-m", "pip", "uninstall", "-y", "-q", "torchao"])
+
+    remaining = _torchao_version()
+    if remaining is None:
+        print("torchao removed.")
+        return
+
+    # Uninstall didn't stick (seen on some Colab images). Fall back to
+    # upgrading it to a version peft accepts, rather than leaving it broken.
+    print(f"torchao=={remaining} is still importable after uninstall; trying to upgrade it instead.")
+    subprocess.run([sys.executable, "-m", "pip", "install", "-q", "-U", "torchao>=0.16.0"])
+
+    final = _torchao_version()
+    if final is not None and parse(final) >= parse("0.16.0"):
+        print(f"torchao upgraded to {final}.")
+    else:
+        print(f"WARNING: could not get torchao to a compatible state (currently: {final}). "
+              f"peft's PeftModel.from_pretrained/get_peft_model may still fail with the "
+              f"'incompatible version of torchao' ImportError. If it does, restart the Colab "
+              f"runtime (Runtime > Restart session) and re-run -- this clears whatever is "
+              f"keeping the old torchao resolvable.")
 
 
 def install_dependencies(env: dict) -> None:
