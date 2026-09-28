@@ -99,13 +99,44 @@ def ensure_git_identity() -> None:
         print("No git identity configured; using a local automated-run identity for this commit.")
 
 
-def push_with_token(branch: str) -> None:
+def get_github_token(prompt_if_missing: bool) -> str | None:
     import os
+    import sys as _sys
 
     token = os.environ.get("GITHUB_TOKEN")
+    if token:
+        return token
+    if not prompt_if_missing:
+        return None
+
+    # Guard against hanging on an unattended/non-interactive run. Note: on
+    # Windows, getpass reads from the console device directly and can still
+    # block even with stdin redirected/closed -- isatty() is the best
+    # available check, but --no-prompt-token is the only fully reliable
+    # opt-out for scheduled/headless runs on Windows.
+    if not _sys.stdin.isatty():
+        print("No interactive terminal detected; skipping the token prompt. "
+              "Set GITHUB_TOKEN beforehand, or pass --no-prompt-token to silence this.")
+        return None
+
+    import getpass
+
+    print("GITHUB_TOKEN not set. To push results, paste a fine-grained GitHub token")
+    print("(repo-scoped, Contents: Read and write) -- input is hidden, and it is never")
+    print("printed, logged, or written to any file. Leave blank to skip the push.")
+    try:
+        token = getpass.getpass("GitHub token: ")
+    except (EOFError, OSError):
+        # No interactive stdin available (e.g. a headless/unattended run).
+        return None
+    return token.strip() or None
+
+
+def push_with_token(branch: str, prompt_if_missing: bool) -> None:
+    token = get_github_token(prompt_if_missing)
     if not token:
-        print("GITHUB_TOKEN not set; skipping push. Results are committed locally -- see README.md "
-              "'GitHub push access' for how to set the token up.")
+        print("No token available; skipping push. Results are committed locally -- see README.md "
+              "'GitHub push access' for how to set GITHUB_TOKEN up ahead of time.")
         return
 
     remote_url = git(["remote", "get-url", "origin"]).stdout.strip()
@@ -180,6 +211,9 @@ def main() -> None:
     parser.add_argument("--skip-eval", action="store_true")
     parser.add_argument("--no-commit", action="store_true", help="run every stage but touch no git state")
     parser.add_argument("--no-push", action="store_true", help="commit locally but don't push")
+    parser.add_argument("--no-prompt-token", action="store_true",
+                         help="don't interactively prompt for a token if GITHUB_TOKEN isn't set "
+                              "(use for unattended/scheduled runs, so they can't block on stdin)")
     parser.add_argument("--branch", default="main")
     # parse_known_args so this also runs unmodified inside Jupyter/Colab, which
     # injects its own "-f <kernel.json>" flag into sys.argv.
@@ -315,7 +349,7 @@ def main() -> None:
         print("--no-push set: commit created locally, not pushed.")
         return
 
-    push_with_token(args.branch)
+    push_with_token(args.branch, prompt_if_missing=not args.no_prompt_token)
 
 
 if __name__ == "__main__":

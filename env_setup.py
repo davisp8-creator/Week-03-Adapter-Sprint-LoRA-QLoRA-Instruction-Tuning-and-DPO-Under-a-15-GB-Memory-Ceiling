@@ -77,6 +77,26 @@ def _pip_install(*args: str) -> None:
     subprocess.check_call([sys.executable, "-m", "pip", "install", "-q", *args])
 
 
+def _remove_incompatible_torchao() -> None:
+    """Colab preinstalls an old torchao (e.g. 0.10.0). peft>=0.21's LoRA dispatch
+    calls is_torchao_available(), which *raises* (not returns False) if torchao
+    is present but below 0.16.0 -- breaking every PeftModel.from_pretrained/
+    get_peft_model call. We don't use torchao (we use bitsandbytes 4-bit), so
+    just remove it rather than upgrading a package we never touch."""
+    try:
+        import importlib.metadata as _md
+
+        version = _md.version("torchao")
+    except _md.PackageNotFoundError:
+        return
+
+    from packaging.version import parse
+
+    if parse(version) < parse("0.16.0"):
+        print(f"Removing incompatible torchao=={version} (peft requires >=0.16.0 or absent)")
+        subprocess.check_call([sys.executable, "-m", "pip", "uninstall", "-y", "-q", "torchao"])
+
+
 def install_dependencies(env: dict) -> None:
     """Install torch (CPU or CUDA build) plus the shared HF/PEFT/TRL stack."""
     plat = env["platform"]
@@ -90,6 +110,7 @@ def install_dependencies(env: dict) -> None:
         _pip_install("torch", "--index-url", "https://download.pytorch.org/whl/cpu")
 
     _pip_install(*BASE_PACKAGES.values())
+    _remove_incompatible_torchao()
 
 
 def resolve_device() -> tuple[str, str | None]:
