@@ -23,11 +23,13 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import inspect
 import json
 import time
 from pathlib import Path
 
 import torch
+import transformers
 from peft import LoraConfig, get_peft_model
 from transformers import (
     AutoModelForCausalLM,
@@ -121,6 +123,29 @@ def make_collate_fn(pad_token_id: int):
     return collate
 
 
+def build_training_arguments(total_train_steps: int, **desired: object) -> TrainingArguments:
+    """Construct TrainingArguments, tolerating field drift across transformers
+    releases (e.g. transformers>=5 dropped warmup_ratio in favor of warmup_steps)."""
+    supported = set(inspect.signature(TrainingArguments.__init__).parameters)
+
+    if "warmup_ratio" in desired and "warmup_ratio" not in supported and "warmup_steps" in supported:
+        ratio = desired.pop("warmup_ratio")
+        steps = max(1, round(ratio * total_train_steps))
+        desired.setdefault("warmup_steps", steps)
+        print(f"Note: transformers=={transformers.__version__} has no warmup_ratio; "
+              f"using warmup_steps={steps} ({ratio:.0%} of {total_train_steps} total steps) instead.")
+
+    dropped = [k for k in desired if k not in supported]
+    if dropped:
+        print(
+            f"Note: transformers=={transformers.__version__} TrainingArguments "
+            f"doesn't accept {dropped}; skipping those (using its defaults instead)."
+        )
+        for k in dropped:
+            desired.pop(k)
+    return TrainingArguments(**desired)
+
+
 class GPUMemoryLimitExceeded(RuntimeError):
     pass
 
@@ -201,6 +226,7 @@ def main() -> None:
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
+    print(f"transformers=={transformers.__version__}  torch=={torch.__version__}")
     print(f"Loading tokenizer/model: {args.model_name}")
     tokenizer = AutoTokenizer.from_pretrained(args.model_name)
     if tokenizer.pad_token is None:
@@ -241,7 +267,11 @@ def main() -> None:
     train_dataset = ComplaintTicketDataset(args.data, tokenizer, args.max_length)
     print(f"Loaded {len(train_dataset)} training examples from {args.data}")
 
-    training_args = TrainingArguments(
+    steps_per_epoch = -(-len(train_dataset) // (args.batch_size * args.grad_accum))  # ceil div
+    total_train_steps = max(1, round(steps_per_epoch * args.epochs))
+
+    training_args = build_training_arguments(
+        total_train_steps=total_train_steps,
         output_dir=str(output_dir),
         per_device_train_batch_size=args.batch_size,
         gradient_accumulation_steps=args.grad_accum,
