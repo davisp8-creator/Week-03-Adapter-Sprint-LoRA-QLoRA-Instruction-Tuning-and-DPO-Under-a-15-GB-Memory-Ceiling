@@ -1,29 +1,118 @@
-# Week-03-Adapter-Sprint-LoRA-QLoRA-Instruction-Tuning-and-DPO-Under-a-15-GB-Memory-Ceiling
-Week 03 Assessment
-🏙️ CivicDesk 311 Complaint Rewriter: NLP Project Brief
-👤 Role & Context
-Company: CivicDesk (A vendor routing municipal 311 service requests for mid-sized cities)
-Role: Junior NLP Engineer
-Stakeholder: Elena Vasquez (Product Manager)
-🎯 Objective
-Build a lightweight AI assistant that automatically rewrites messy, unstructured resident complaints into clean, structured dispatch tickets.
-⚠️ Constraints
-Hardware Budget: Strictly limited to a free-tier Google Colab GPU.
-Tooling: Must utilize Claude Code or Claude Co-Work for development and agent orchestration.
-🛠️ Execution Steps
-1. Model Selection & Fine-Tuning
-Select a small, open-source pretrained model (e.g., a sub-1B parameter model from the Hugging Face Hub).
-Adapt the model using LoRA or QLoRA to ensure it fits within the memory constraints of the free-tier GPU.
-2. Instruction Dataset Generation
-Create an instruction-tuning dataset consisting of a few hundred realistic 311 complaint-to-ticket pairs.
-Action: Write a Python script or prompt the AI agent to synthesize this data.
-3. Preference Optimization (DPO)
-Construct a preference dataset containing chosen (ideal) vs. rejected (poor) rewrites.
-Execute a short DPO (Direct Preference Optimization) pass on top of the LoRA adapter to align the model's outputs with CivicDesk's quality standards.
-4. Instrumentation & Profiling
-Rigorously track and log peak GPU memory usage for every training and inference run.
-Track and log wall-clock time for every run to prove efficiency.
-📦 Deliverables
-Code Repository: A complete, well-documented repo containing the data synthesis scripts, LoRA/QLoRA training loops, DPO implementation, and memory/time instrumentation.
-Narrated Session Recording: A video or audio walkthrough demonstrating the workflow, proving that the entire approach successfully fits within the free-tier Colab hardware budget.
-Target Audience: Elena Vasquez and the CivicDesk platform team.
+# CivicDesk 311 Complaint Rewriter
+
+Small NLP assistant that rewrites messy, free-text resident 311 complaints
+into structured dispatch tickets (`category`, `urgency`, `location`,
+`summary`, `address`), built to fit inside a Google Colab free-tier T4 GPU's
+~15 GB memory ceiling. See [ASSIGNMENT.md](ASSIGNMENT.md) for the original
+project brief.
+
+Pipeline: synthesize an instruction dataset -> QLoRA fine-tune a sub-1B base
+model -> synthesize a targeted DPO preference set -> DPO-align the adapter on
+top of the frozen SFT policy -> evaluate base vs. SFT vs. DPO on held-out
+complaints. Every training run logs peak GPU memory and wall-clock time; see
+[RUNLOG.md](RUNLOG.md) for the real failures hit along the way, how each was
+diagnosed, and how it was fixed.
+
+## Repo layout
+
+| Path | Purpose |
+|---|---|
+| `env_setup.py` | Detects Windows VM vs. Colab, installs the matching torch build (CUDA vs. CPU) plus the shared HF/PEFT/TRL stack |
+| `scripts/generate_synthetic_complaints.py` | Synthesizes the 400-example SFT instruction dataset |
+| `scripts/generate_dpo_pairs.py` | Synthesizes the 150-pair DPO preference dataset (address-hallucination axis) |
+| `scripts/prompting.py` | Shared prompt template used by every stage |
+| `scripts/compat.py` | Tolerates `transformers`/`trl` API drift across releases (see RUNLOG.md) |
+| `scripts/instrumentation.py` | Shared Trainer callback: logs peak GPU memory + wall-clock time every N steps, aborts loudly over the memory ceiling |
+| `scripts/train_qlora.py` | 4-bit NF4 QLoRA SFT fine-tune |
+| `scripts/train_dpo.py` | DPO pass (trl) on top of the saved SFT adapter, frozen SFT policy as reference |
+| `scripts/evaluate_models.py` | Side-by-side base vs. SFT vs. DPO comparison on held-out complaints |
+| `scripts/run_pipeline.py` | Controller: runs every stage above end to end on either environment, then commits results + updates this README back to GitHub |
+| `data/` | Generated datasets (checked in for reproducibility) |
+| `outputs/` | Trained adapters + per-run memory/time logs (checked in by the controller) |
+| `runs/` | One JSON record per controller run (system, timings, peak memory) |
+
+## Model
+
+Base model: [`openai-community/gpt2`](https://huggingface.co/openai-community/gpt2)
+(124M params, well under the sub-1B budget). It's small enough that 4-bit
+quantization isn't strictly *necessary* for memory -- it's used anyway
+because the point of the exercise is practicing the QLoRA workflow under a
+memory ceiling, and the same scripts work unchanged on a larger sub-1B model
+that actually needed it.
+
+## Setup
+
+Works on either a Windows Server VM (CPU-only, Intel) or a Google Colab T4
+GPU notebook -- `env_setup.py` detects which one it's on and installs
+accordingly.
+
+```bash
+git clone https://github.com/davisp8-creator/Week-03-Adapter-Sprint-LoRA-QLoRA-Instruction-Tuning-and-DPO-Under-a-15-GB-Memory-Ceiling.git
+cd Week-03-Adapter-Sprint-LoRA-QLoRA-Instruction-Tuning-and-DPO-Under-a-15-GB-Memory-Ceiling
+python env_setup.py
+```
+
+### GitHub push access (optional, only needed for `run_pipeline.py`)
+
+The controller script can commit its results (adapters, logs, this README's
+Run History table) back to this repo. It needs a **fine-grained GitHub
+personal access token**, scoped to *only this repository*, with **Contents:
+Read and write** permission -- create one at GitHub -> Settings -> Developer
+settings -> Fine-grained tokens.
+
+Never paste the token directly into a notebook cell that gets saved, and
+never commit it. On Colab, use the built-in Secrets manager (key icon in the
+left sidebar):
+
+```python
+from google.colab import userdata
+import os
+os.environ["GITHUB_TOKEN"] = userdata.get("GITHUB_TOKEN")
+```
+
+On the Windows VM, set it as a real environment variable for the session
+(PowerShell: `$env:GITHUB_TOKEN = "..."`). If `GITHUB_TOKEN` isn't set,
+`run_pipeline.py` still runs every stage and writes results locally -- it
+just skips the push and says so.
+
+## Running the full pipeline
+
+```bash
+python scripts/run_pipeline.py
+```
+
+This runs, in order: environment detection/setup, SFT dataset generation,
+DPO dataset generation, QLoRA SFT training (GPU only), DPO training (GPU
+only, needs the SFT adapter), evaluation (GPU if available, else CPU, needs
+both adapters) -- then writes a `runs/<timestamp>.json` record, updates this
+README's Run History table, and commits + pushes the results.
+
+Stages that need a GPU are skipped (not failed) with a clear reason when run
+on the CPU-only Windows VM; a later run on Colab, or a `git pull` of adapters
+someone already trained, picks up where it left off.
+
+Flags: `--skip-sft`, `--skip-dpo`, `--skip-eval`, `--no-commit` (run
+everything, touch no git state at all), `--no-push` (commit locally, don't
+push).
+
+## Running stages individually
+
+```bash
+python scripts/generate_synthetic_complaints.py --n 400 --out data/311_complaints.jsonl
+python scripts/generate_dpo_pairs.py --n 150 --out data/dpo_address_preferences.jsonl
+python scripts/train_qlora.py --data data/311_complaints.jsonl --output-dir outputs/qlora-gpt2-311
+python scripts/train_dpo.py --sft-adapter outputs/qlora-gpt2-311/adapter --output-dir outputs/dpo-gpt2-311
+python scripts/evaluate_models.py --sft-adapter outputs/qlora-gpt2-311/adapter --dpo-adapter outputs/dpo-gpt2-311/adapter
+```
+
+## Run History
+
+Updated automatically by `scripts/run_pipeline.py` on every run (newest
+first). Rows above the markers below were entered manually, before the
+controller script existed.
+
+<!-- RUN_HISTORY:START -->
+| Date | System | GPU | Steps run | Total time | Peak GPU mem |
+|---|---|---|---|---|---|
+| 2026-09-27 | Google Colab (manual run, pre-controller) | T4 | sft | 1m 23s | 0.76 GB |
+<!-- RUN_HISTORY:END -->
