@@ -69,6 +69,42 @@ either library without another hard crash.
 after the fix. Training completed end to end: 75 steps, loss 3.173 -> 1.577,
 peak GPU memory 0.76 GB, wall clock 83.1 s. See README.md Run History.
 
+## Failure 3: Colab's preinstalled `torchao` breaks every `PeftModel` load
+
+**Symptom** (running `evaluate_models.py` on Colab, right after `train_qlora`
+and `train_dpo` had both already completed successfully in the same
+pipeline run):
+```
+File ".../peft/tuners/lora/torchao.py", line 160, in dispatch_torchao
+    if not is_torchao_available():
+File ".../peft/import_utils.py", line 147, in is_torchao_available
+    raise ImportError(
+ImportError: Found an incompatible version of torchao. Found version 0.10.0, but only versions above 0.16.0 are supported
+```
+
+**Root cause**: read `peft`'s actual source
+(`peft/import_utils.py::is_torchao_available`) rather than guessing. It
+doesn't just return `False` when `torchao` is missing or unusable -- if
+`torchao` **is** importable but below version 0.16.0, it deliberately
+*raises* `ImportError`. Colab's default image ships `torchao==0.10.0`
+preinstalled (for its own torch build), which is unrelated to anything our
+pipeline uses -- we quantize with bitsandbytes 4-bit NF4, not torchao. Every
+`PeftModel.from_pretrained` / `get_peft_model` call walks all of `peft`'s
+tuner dispatchers, including the torchao one, so this broke adapter loading
+entirely, not just a torchao-specific code path.
+
+**Fix**: `env_setup.py::_remove_incompatible_torchao()` checks the installed
+`torchao` version after installing our stack and uninstalls it if it's below
+0.16.0 (leaves it alone if absent or already compatible). Since we never use
+torchao, removing it is safer than upgrading a package we don't otherwise
+touch.
+
+**Verified so far**: confirmed via `peft`'s actual installed source (above)
+that this is the real mechanism, and confirmed locally that
+`_remove_incompatible_torchao()` is a safe no-op on a box without torchao
+installed (the Windows VM). Not yet re-run on Colab against a real
+`torchao==0.10.0` install -- that's the next real-environment check.
+
 ## Known unexercised path: the GPU memory ceiling has never actually been hit
 
 `scripts/instrumentation.py::InstrumentationCallback` aborts training loudly
