@@ -342,7 +342,9 @@ def main() -> None:
     parser.add_argument("--seed", type=int, default=42, help="random seed for reproducibility")
     parser.add_argument("--no-address-rate", type=float, default=0.15, help="fraction of records with no address")
     parser.add_argument("--preview", type=int, default=0, help="print N sample records and exit without writing")
-    args = parser.parse_args()
+    # parse_known_args (not parse_args) so this also works unmodified inside
+    # Jupyter/Colab, which injects its own "-f <kernel.json>" flag into sys.argv.
+    args, _unknown = parser.parse_known_args()
 
     records = generate_dataset(args.n, args.no_address_rate, args.seed)
 
