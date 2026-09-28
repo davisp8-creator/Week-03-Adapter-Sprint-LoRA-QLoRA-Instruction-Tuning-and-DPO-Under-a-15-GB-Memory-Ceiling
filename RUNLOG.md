@@ -69,6 +69,56 @@ either library without another hard crash.
 after the fix. Training completed end to end: 75 steps, loss 3.173 -> 1.577,
 peak GPU memory 0.76 GB, wall clock 83.1 s. See README.md Run History.
 
+## Failure 3: Colab's preinstalled `torchao` breaks every `PeftModel` load
+
+**Symptom** (running `evaluate_models.py` on Colab, right after `train_qlora`
+and `train_dpo` had both already completed successfully in the same
+pipeline run):
+```
+File ".../peft/tuners/lora/torchao.py", line 160, in dispatch_torchao
+    if not is_torchao_available():
+File ".../peft/import_utils.py", line 147, in is_torchao_available
+    raise ImportError(
+ImportError: Found an incompatible version of torchao. Found version 0.10.0, but only versions above 0.16.0 are supported
+```
+
+**Root cause**: read `peft`'s actual source
+(`peft/import_utils.py::is_torchao_available`) rather than guessing. It
+doesn't just return `False` when `torchao` is missing or unusable -- if
+`torchao` **is** importable but below version 0.16.0, it deliberately
+*raises* `ImportError`. Colab's default image ships `torchao==0.10.0`
+preinstalled (for its own torch build), which is unrelated to anything our
+pipeline uses -- we quantize with bitsandbytes 4-bit NF4, not torchao. Every
+`PeftModel.from_pretrained` / `get_peft_model` call walks all of `peft`'s
+tuner dispatchers, including the torchao one, so this broke adapter loading
+entirely, not just a torchao-specific code path.
+
+**Fix, attempt 1**: `env_setup.py::_remove_incompatible_torchao()` checked
+the installed `torchao` version and ran `pip uninstall -y torchao` if it was
+below 0.16.0. Pushed, then re-run on Colab -- the exact same
+`ImportError: Found an incompatible version of torchao. Found version
+0.10.0, ...` recurred, meaning the uninstall didn't actually stick (Colab's
+preinstalled packages are sometimes missing the metadata pip needs to fully
+remove them, or something else on that image keeps them resolvable).
+
+**Fix, attempt 2**: made the check self-verifying instead of trusting the
+uninstall silently. `_torchao_version()` now shells out to a fresh
+`python -c "import importlib.metadata..."` subprocess (avoids relying on
+this process's own possibly-stale import-metadata cache) both before and
+after attempting removal. If `torchao` is still importable after
+`pip uninstall`, it falls back to `pip install -U "torchao>=0.16.0"` instead
+(upgrading is a normal install operation and more likely to succeed on an
+image where a destructive uninstall doesn't). If even that doesn't leave
+`torchao` at >=0.16.0 or absent, it prints an explicit warning to restart
+the Colab runtime (Runtime > Restart session) rather than failing silently
+again.
+
+**Verified so far**: confirmed via `peft`'s actual installed source that the
+raise-not-return-False mechanism is real, and confirmed locally that the
+whole function is a safe no-op on a box without torchao installed (the
+Windows VM). Attempt 1 was verified NOT to fix the real Colab failure --
+that's why attempt 2 exists. Attempt 2 has not yet been re-run on Colab.
+
 ## Known unexercised path: the GPU memory ceiling has never actually been hit
 
 `scripts/instrumentation.py::InstrumentationCallback` aborts training loudly
