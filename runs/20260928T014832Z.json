@@ -1,0 +1,36 @@
+{
+  "run_id": "20260928T014832Z",
+  "date": "2026-09-28",
+  "system": "colab (Linux)",
+  "gpu": "Tesla T4",
+  "steps": "gen_sft_data, gen_dpo_data, qlora, dpo",
+  "total_time": "3m 44s",
+  "peak_mem": "0.76 GB",
+  "steps_detail": [
+    {
+      "name": "generate_sft_data",
+      "status": "ran",
+      "elapsed_sec": 0.1
+    },
+    {
+      "name": "generate_dpo_data",
+      "status": "ran",
+      "elapsed_sec": 0.1
+    },
+    {
+      "name": "train_qlora",
+      "status": "ran",
+      "elapsed_sec": 96.6
+    },
+    {
+      "name": "train_dpo",
+      "status": "ran",
+      "elapsed_sec": 108.5
+    },
+    {
+      "name": "evaluate",
+      "status": "failed",
+      "elapsed_sec": 11.3
+    }
+  ]
+}

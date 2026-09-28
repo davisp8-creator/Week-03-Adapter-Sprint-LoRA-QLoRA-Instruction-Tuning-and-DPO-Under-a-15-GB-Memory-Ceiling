@@ -1,0 +1,15 @@
+{
+  "model_name": "openai-community/gpt2",
+  "dataset": "data/311_complaints.jsonl",
+  "num_examples": 400,
+  "epochs": 3.0,
+  "batch_size": 4,
+  "grad_accum": 4,
+  "effective_batch_size": 16,
+  "learning_rate": 0.0002,
+  "lora_r": 16,
+  "lora_alpha": 32,
+  "peak_gpu_mem_gb": 0.762,
+  "mem_limit_gb": 14.0,
+  "wall_clock_sec": 83.4
+}
