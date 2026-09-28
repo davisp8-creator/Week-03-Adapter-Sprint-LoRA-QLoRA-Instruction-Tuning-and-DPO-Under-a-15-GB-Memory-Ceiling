@@ -136,6 +136,7 @@ controller script existed.
 <!-- RUN_HISTORY:START -->
 | Date | System | GPU | Steps run | Total time | Peak GPU mem |
 |---|---|---|---|---|---|
+| 2026-09-28 | colab (Linux) | Tesla T4 | gen_sft_data, gen_dpo_data, qlora, dpo | 3m 43s | 0.76 GB |
 | 2026-09-28 | colab (Linux) | Tesla T4 | gen_sft_data, gen_dpo_data, qlora, dpo | 3m 40s | 0.76 GB |
 | 2026-09-28 | colab (Linux) | Tesla T4 | gen_sft_data, gen_dpo_data, qlora, dpo | 3m 44s | 0.76 GB |
 | 2026-09-28 | windows (Windows) | CPU only | gen_sft_data, gen_dpo_data | 2s | N/A (no GPU) |
