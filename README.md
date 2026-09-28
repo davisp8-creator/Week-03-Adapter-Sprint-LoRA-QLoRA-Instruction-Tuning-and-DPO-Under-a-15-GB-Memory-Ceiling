@@ -105,6 +105,28 @@ python scripts/train_dpo.py --sft-adapter outputs/qlora-gpt2-311/adapter --outpu
 python scripts/evaluate_models.py --sft-adapter outputs/qlora-gpt2-311/adapter --dpo-adapter outputs/dpo-gpt2-311/adapter
 ```
 
+## Environment Comparison
+
+The same `scripts/run_pipeline.py` controller was run unmodified on both
+target environments. It correctly ran the CPU-safe stages and skipped the
+GPU-only stages (with a stated reason, not a crash) where there's no CUDA
+GPU:
+
+| | Windows VM (CPU-only, Intel) | Google Colab (T4 GPU) |
+|---|---|---|
+| Ran | data generation only | QLoRA SFT training |
+| Skipped | `train_qlora`, `train_dpo`, `evaluate` -- all "no CUDA GPU available" (eval also "adapters not both present") | -- |
+| Wall clock | 2s | 1m 23s |
+| Peak GPU memory | N/A (no GPU) | 0.76 GB (14 GB ceiling) |
+
+This is the intended behavior, not a limitation being worked around: the
+Windows VM is meant to handle the CPU-safe half of the pipeline (data
+synthesis, and evaluation once adapters exist locally), while GPU-bound
+training only ever runs on Colab. Once a Colab run produces the SFT and DPO
+adapters and they're committed back to the repo (see Run History below), a
+later `run_pipeline.py` run on the Windows VM will also execute `evaluate`
+against them on CPU.
+
 ## Run History
 
 Updated automatically by `scripts/run_pipeline.py` on every run (newest
