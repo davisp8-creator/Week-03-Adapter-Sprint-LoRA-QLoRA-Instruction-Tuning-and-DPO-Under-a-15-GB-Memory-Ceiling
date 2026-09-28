@@ -23,7 +23,6 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import inspect
 import json
 import time
 from pathlib import Path
@@ -36,7 +35,6 @@ from transformers import (
     AutoTokenizer,
     BitsAndBytesConfig,
     Trainer,
-    TrainerCallback,
     TrainingArguments,
     set_seed,
 )
@@ -46,6 +44,8 @@ try:
 except ImportError:  # older peft releases
     from peft import prepare_model_for_int8_training as prepare_model_for_kbit_training
 
+from compat import build_config
+from instrumentation import GPUMemoryLimitExceeded, InstrumentationCallback
 from prompting import build_prompt
 
 
@@ -108,80 +108,6 @@ def make_collate_fn(pad_token_id: int):
         }
 
     return collate
-
-
-def build_training_arguments(total_train_steps: int, **desired: object) -> TrainingArguments:
-    """Construct TrainingArguments, tolerating field drift across transformers
-    releases (e.g. transformers>=5 dropped warmup_ratio in favor of warmup_steps)."""
-    supported = set(inspect.signature(TrainingArguments.__init__).parameters)
-
-    if "warmup_ratio" in desired and "warmup_ratio" not in supported and "warmup_steps" in supported:
-        ratio = desired.pop("warmup_ratio")
-        steps = max(1, round(ratio * total_train_steps))
-        desired.setdefault("warmup_steps", steps)
-        print(f"Note: transformers=={transformers.__version__} has no warmup_ratio; "
-              f"using warmup_steps={steps} ({ratio:.0%} of {total_train_steps} total steps) instead.")
-
-    dropped = [k for k in desired if k not in supported]
-    if dropped:
-        print(
-            f"Note: transformers=={transformers.__version__} TrainingArguments "
-            f"doesn't accept {dropped}; skipping those (using its defaults instead)."
-        )
-        for k in dropped:
-            desired.pop(k)
-    return TrainingArguments(**desired)
-
-
-class GPUMemoryLimitExceeded(RuntimeError):
-    pass
-
-
-class MemoryGuardCallback(TrainerCallback):
-    """Logs peak GPU memory on every Trainer log event and aborts over the ceiling."""
-
-    def __init__(self, limit_gb: float, log_path: Path):
-        self.limit_gb = limit_gb
-        self.log_path = log_path
-        self.start_time: float | None = None
-
-    def on_train_begin(self, args, state, control, **kwargs):
-        torch.cuda.reset_peak_memory_stats()
-        self.start_time = time.time()
-        self.log_path.write_text("", encoding="utf-8")
-        return control
-
-    def on_log(self, args, state, control, logs=None, **kwargs):
-        if not logs or "loss" not in logs:
-            return control  # skip non-step logs (e.g. final train_runtime summary)
-
-        peak_gb = torch.cuda.max_memory_allocated() / 1024**3
-        elapsed = time.time() - self.start_time
-
-        record = {
-            "step": state.global_step,
-            "loss": logs["loss"],
-            "peak_mem_gb": round(peak_gb, 3),
-            "elapsed_sec": round(elapsed, 1),
-        }
-        print(
-            f"[step {state.global_step:>5}] loss={logs['loss']:.4f}  "
-            f"peak GPU mem={peak_gb:.2f} GB  elapsed={elapsed:.1f}s"
-        )
-        with self.log_path.open("a", encoding="utf-8") as f:
-            f.write(json.dumps(record) + "\n")
-
-        if peak_gb > self.limit_gb:
-            banner = "!" * 70
-            print(banner)
-            print(f"GPU MEMORY LIMIT EXCEEDED: {peak_gb:.2f} GB > {self.limit_gb:.2f} GB ceiling")
-            print(banner)
-            raise GPUMemoryLimitExceeded(
-                f"Peak GPU memory {peak_gb:.2f} GB exceeded the {self.limit_gb:.2f} GB "
-                f"ceiling at step {state.global_step}. Reduce --batch-size/--max-length "
-                f"or raise --mem-limit-gb."
-            )
-        return control
 
 
 def main() -> None:
@@ -257,7 +183,8 @@ def main() -> None:
     steps_per_epoch = -(-len(train_dataset) // (args.batch_size * args.grad_accum))  # ceil div
     total_train_steps = max(1, round(steps_per_epoch * args.epochs))
 
-    training_args = build_training_arguments(
+    training_args = build_config(
+        TrainingArguments,
         total_train_steps=total_train_steps,
         output_dir=str(output_dir),
         per_device_train_batch_size=args.batch_size,
@@ -283,7 +210,7 @@ def main() -> None:
         args=training_args,
         train_dataset=train_dataset,
         data_collator=make_collate_fn(tokenizer.pad_token_id),
-        callbacks=[MemoryGuardCallback(args.mem_limit_gb, memory_log_path)],
+        callbacks=[InstrumentationCallback(args.mem_limit_gb, memory_log_path)],
     )
 
     start = time.time()
