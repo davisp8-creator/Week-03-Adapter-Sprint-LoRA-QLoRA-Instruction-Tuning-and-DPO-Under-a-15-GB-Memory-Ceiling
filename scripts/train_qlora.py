@@ -46,20 +46,7 @@ try:
 except ImportError:  # older peft releases
     from peft import prepare_model_for_int8_training as prepare_model_for_kbit_training
 
-
-PROMPT_TEMPLATE = (
-    "### Instruction:\n"
-    "Rewrite the resident complaint below into a structured 311 dispatch ticket. "
-    "Respond with a single JSON object with exactly these fields: category, "
-    "urgency (Low/Medium/High/Emergency), location, summary, and address "
-    "(use null if no address is given).\n\n"
-    "### Complaint:\n{complaint}\n\n"
-    "### Ticket:\n"
-)
-
-
-def build_prompt(complaint: str) -> str:
-    return PROMPT_TEMPLATE.format(complaint=complaint.strip())
+from prompting import build_prompt
 
 
 class ComplaintTicketDataset(torch.utils.data.Dataset):
